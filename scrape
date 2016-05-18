@@ -1,0 +1,68 @@
+#!/usr/bin/env perl
+use v5.12;
+use warnings;
+
+use Mojo::DOM;
+use Mojo::URL;
+use Mojo::UserAgent;
+
+# postgres -D /usr/local/var/postgres
+use constant INTERVAL => 2;
+
+my $ua = Mojo::UserAgent->new;
+
+sub run {
+    my $this_week = 'http://www.kfjc.org/music/pl-weekly.php';
+    my $last_week;
+    do {
+        say "Fetching DJ playlists from this week @ $this_week";
+        my $d = $ua->get($this_week)->res->dom;
+
+        # Collect songs from each DJ link on this page.
+        $d->find('table tr td a[href*="playlist"]')
+          ->map(sub        { $_->attr('href') })->grep(qr/\?i=\d/)
+          ->uniq->each(sub { songs($_) });
+
+        # Collect last week's link.
+        $last_week
+          = $d->find('p a[href*="pl-weekly.php?start_date"]')
+          ->grep(sub { my $t = $_->text; $t =~ /^.week$/; })
+          ->first->attr('href');
+
+        # Mark last week as current link (this week).
+        $this_week = Mojo::URL->new($last_week)
+          ->base(Mojo::URL->new("http://www.kfjc.org"))->to_abs;
+
+        # Try not to overload the server.
+        sleep INTERVAL;
+    } while ($last_week);
+}
+
+# Fetch given DJ link and scrape info for each song.
+sub songs {
+    my $path = shift;
+    my $uri = Mojo::URL->new($path)->base(Mojo::URL->new("http://www.kfjc.org"))
+      ->to_abs;
+
+    # Try not to overload the server.
+    sleep INTERVAL;
+
+    say "Fetching $uri";
+
+    # Get each table row for song info.
+    my @songs
+      = $ua->get($uri)
+      ->res->dom->find(
+        'body table tr:last-child td:last-child div table tr:not(:first-child) td'
+      )->map('all_text')->grep(sub { s/\s+/ /gs; 1 })->each;
+
+    # Iterate songs and do something...
+    while (my ($artist, $title, $album, $label, $time) = splice @songs, 0, 5) {
+        next unless $artist =~ /\w/;
+
+        # TODO do something useful.
+        say "$artist - $title\n";
+    }
+}
+
+__PACKAGE__->run unless caller;
